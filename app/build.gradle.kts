@@ -22,11 +22,11 @@ android {
         }
         
         val localProperties = com.android.build.gradle.internal.cxx.configure.gradleLocalProperties(rootDir)
-        val apiKey = localProperties.getProperty("API_KEY") ?: ""
-        val modelName = localProperties.getProperty("MODEL_NAME") ?: "gpt-3.5-turbo"
+        val geminiApiKey = localProperties.getProperty("GEMINI_API_KEY") ?: ""
+        val modelName = localProperties.getProperty("MODEL_NAME") ?: "gemini-1.5-flash"
         val porcupineKey = localProperties.getProperty("PORCUPINE_ACCESS_KEY") ?: ""
         val cloudTtsKey = localProperties.getProperty("CLOUD_TTS_KEY") ?: ""
-        buildConfigField("String", "API_KEY", "\"$apiKey\"")
+        buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
         buildConfigField("String", "MODEL_NAME", "\"$modelName\"")
         buildConfigField("String", "PORCUPINE_ACCESS_KEY", "\"$porcupineKey\"")
         buildConfigField("String", "CLOUD_TTS_KEY", "\"$cloudTtsKey\"")

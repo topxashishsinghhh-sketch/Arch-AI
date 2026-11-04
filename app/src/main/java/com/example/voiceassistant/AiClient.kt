@@ -36,7 +36,7 @@ class AiClient {
     suspend fun getResponse(userMessage: String): Result<String> = withContext(Dispatchers.IO) {
         try {
             withTimeout(30000L) {
-                // Add user message to history
+                // Add user message to history (Gemini uses "user" and "model")
                 conversationHistory.add(ChatMessage("user", userMessage))
                 
                 // Trim history to last 10 turns (20 messages)
@@ -47,56 +47,86 @@ class AiClient {
                     }
                 }
                 
-                val messages = mutableListOf(
-                    ChatMessage("system", systemPrompt)
-                )
-                messages.addAll(conversationHistory)
-                
-                val requestBody = buildRequestBody(messages)
+                val requestBody = buildRequestBody()
+                val modelName = BuildConfig.MODEL_NAME
                 val request = Request.Builder()
-                    .url("https://api.openai.com/v1/chat/completions")
-                    .addHeader("Authorization", "Bearer ${BuildConfig.API_KEY}")
+                    .url("https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent")
+                    .addHeader("x-goog-api-key", BuildConfig.GEMINI_API_KEY)
                     .addHeader("Content-Type", "application/json")
                     .post(requestBody.toRequestBody(mediaType))
                     .build()
                 
                 val response = client.newCall(request).execute()
                 if (!response.isSuccessful) {
-                    return@withTimeout Result.failure(IOException("API error: ${response.code}"))
+                    return@withTimeout when (response.code) {
+                        401, 403 -> Result.failure(IOException("Invalid API key"))
+                        429 -> Result.failure(IOException("Rate limit exceeded"))
+                        else -> Result.failure(IOException("API error: ${response.code}"))
+                    }
                 }
                 
                 val responseBody = response.body?.string() ?: ""
                 val assistantMessage = parseResponse(responseBody)
                 
-                // Add assistant message to history
-                conversationHistory.add(ChatMessage("assistant", assistantMessage))
+                if (assistantMessage.isEmpty()) {
+                    return@withTimeout Result.failure(IOException("Empty response"))
+                }
+                
+                // Add assistant message to history (Gemini uses "model")
+                conversationHistory.add(ChatMessage("model", assistantMessage))
                 
                 Result.success(assistantMessage)
             }
         } catch (e: TimeoutCancellationException) {
+            Result.failure(e)
+        } catch (e: IOException) {
             Result.failure(e)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
     
-    private fun buildRequestBody(messages: List<ChatMessage>): String {
-        val messagesJson = messages.joinToString(",") { msg ->
-            """{"role":"${msg.role}","content":"${escapeJson(msg.content)}"}"""
+    private fun buildRequestBody(): String {
+        val contents = conversationHistory.joinToString(",") { msg ->
+            val role = if (msg.role == "user") "user" else "model"
+            """{"role":"$role","parts":[{"text":"${escapeJson(msg.content)}"}]}"""
         }
-        return """{"model":"${BuildConfig.MODEL_NAME}","messages":[$messagesJson],"temperature":0.7,"max_tokens":150}"""
+        
+        return """{
+            "systemInstruction": {
+                "parts": [{"text":"${escapeJson(systemPrompt)}"}]
+            },
+            "contents": [$contents]
+        }"""
     }
     
     private fun parseResponse(responseBody: String): String {
-        // Simple parsing - in production use proper JSON parsing
-        val contentStart = responseBody.indexOf("\"content\":\"")
-        if (contentStart == -1) return "Sorry, I couldn't understand that."
-        val start = contentStart + 11
-        val end = responseBody.indexOf("\"", start)
-        if (end == -1) return "Sorry, I couldn't understand that."
-        return responseBody.substring(start, end)
-            .replace("\\n", " ")
-            .replace("\\\"", "\"")
+        try {
+            // Check for safety block or no candidates
+            if (responseBody.contains("\"blockReason\"") || !responseBody.contains("\"candidates\"")) {
+                return "I'm unable to respond to that request."
+            }
+            
+            // Parse candidates[0].content.parts[0].text
+            val candidatesIndex = responseBody.indexOf("\"candidates\"")
+            if (candidatesIndex == -1) return "Sorry, I couldn't understand that."
+            
+            val textIndex = responseBody.indexOf("\"text\":\"", candidatesIndex)
+            if (textIndex == -1) return "Sorry, I couldn't understand that."
+            
+            val start = textIndex + 8
+            val end = responseBody.indexOf("\"", start)
+            if (end == -1) return "Sorry, I couldn't understand that."
+            
+            val text = responseBody.substring(start, end)
+                .replace("\\n", " ")
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+            
+            return text
+        } catch (e: Exception) {
+            return "Sorry, I couldn't understand that."
+        }
     }
     
     private fun escapeJson(text: String): String {
